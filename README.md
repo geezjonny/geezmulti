@@ -1,13 +1,13 @@
 # Multi VTT
 
-A buildless Three.js tabletop app for GitHub Pages. Import Universal VTT / DD2VTT maps in `dd2vtt.html`; use `viewer.html` for a token’s first-person view.
+A buildless Three.js tabletop app for GitHub Pages. Paint your own maps tile by tile in `dd2vtt.html` (floor, wall, door and light layers); use `viewer.html` for a token’s first-person view. Drawn maps can be exported as `.dd2vtt` files.
 
 ## Try it before Firebase
 
 Double-click `start-server.cmd`, then open **http://localhost:8080**. Alternatively, run `npm start` from this folder (Python required).
 
 1. Open the GM table and create a session.
-2. Load the demo dungeon or import a `.dd2vtt` file.
+2. Paint a map (or click **Starter room**), then **Publish map to players**.
 3. Add a token. Select it and click the map floor to place or move it.
 4. Copy the player invite and open it in another tab in the **same browser and profile**.
 5. Enter a player name and join. Return to the GM tab and assign that player using the token’s dropdown.
@@ -37,12 +37,14 @@ The config file has empty values until you create your Firebase project. Live Fi
 ## GM workflow
 
 - Create a session, or reopen one from the same browser identity. The last GM session opens automatically.
-- Import DD2VTT. Its embedded PNG, JPEG or WebP becomes the floor texture. Wall polylines and object polylines become solid wall segments. Portal bounds become doors.
-- Coordinates subtract `resolution.map_origin` so cropped maps align. One map grid square equals one scene unit. Wall height is configurable from 0.2 to 10 grid units; default is 2.5.
-- Imported doors retain their initial open/closed state. Toggle them from the Doors panel. Opening a door removes it visually from the opening.
+- **Draw mode** shows the map from above. Pick a layer (**Floor**, **Wall**, **Door** or **Light**), choose a tile from the palette, and left-drag to paint. Right-drag, or tick **Erase mode** on touch screens, clears that layer. Scroll to zoom; middle- or Alt-drag to pan.
+- Floor, wall and door tiles are the PNGs in `assets/floor/`, `assets/wall/` and `assets/door/`. Square, seamlessly tiling images work best (64×64 or larger). The local server reads the folders directly, so new PNGs show up on reload. GitHub Pages cannot list folders, so run `npm run assets` (or `start-server.cmd`) to rebuild `assets/assets.json` before you push.
+- Walls are solid one-cell blocks. A door fills its cell and lines up with the walls next to it. Opening a door swings it 90° on its hinge. **Light** places a colored point light in a cell, up to 16 per map. When a map has lights, the ambient light dims so they show.
+- **3D mode** previews the drawing, published or not. Players see only what you **publish**. Republishing keeps tokens and door states, and the map info line flags unpublished changes. **Resize** changes the grid (1–100 cells per side); shrinking deletes the tiles outside the new edge.
+- **Export .dd2vtt** flattens floor, walls and doors into one PNG at 64 px per grid square, then adds wall outlines, portals and lights, for use in Foundry or other Universal VTT importers.
+- Wall height is configurable from 0.2 to 10 grid units; default is 2.5. Toggle doors live from the Doors panel.
 - Add tokens; change their names and facing angles. Select a token, then click the floor to move it. A click on a token selects it. Drag to orbit, right-drag to pan, scroll to zoom.
 - Have players join the session before assigning them in token dropdowns. A player may have multiple assigned tokens and choose among them in the viewer.
-- Replacing a map removes existing tokens and door overrides after confirmation.
 
 ## iPhone viewer
 
@@ -55,27 +57,27 @@ Drag to look on desktop or touch screens. On iPhone, tap **Enable motion** and g
 ```
 sessions/{sessionCode}/
   meta/         owner UID, creation timestamp
-  scene/        normalized map (including base64 floor), height, revision
+  scene/        drawn map (cells per layer: floor, walls, doors, lights), height, revision
   tokens/{id}/  name, position, facing, color, assigned player UID
   players/{uid}/ name, join timestamp
   doors/{id}/   boolean closed override
 ```
 
-Everything, including the embedded image, is saved in Firebase Realtime Database. No Cloud Storage bucket is needed for this version. The normalized scene has a 12 MiB import limit, below the SDK’s 16 MiB single-write limit. Source files are capped at 14 MiB. For bigger maps, export a lower-resolution image; a later version could move assets to Cloud Storage. Original lighting metadata and unrelated source fields are not preserved; this version saves the rendered floor and geometry.
+A drawn map stores only cell → tile-name entries, so even a full 100×100 map is a few hundred KB. The tile PNGs are loaded from the site itself, not from Firebase. Every device needs the same `assets/` files, so publish the PNGs along with the app. Sessions from the old DD2VTT importer show a message asking you to draw a new map.
 
-Scene, token, player and door listeners are separate, so moving a token does not download the map image again. Map replacement uses one atomic multi-path update. Realtime Database handles live updates and temporary reconnection; edits should be made while connected and committed before closing the tab. Persistent offline Firebase editing is not implemented.
+Scene, token, player and door listeners are separate, so moving a token does not download the map image again. Realtime Database handles live updates and temporary reconnection; edits should be made while connected and committed before closing the tab. Persistent offline Firebase editing is not implemented.
 
 Rules let only the session owner edit the map, doors, tokens and assignments. A player can write only their own player registration. Authenticated visitors who know a session code can read its scene and player list. This is invite-code access, with no fog of war or secret-map protection; token assignment controls which character the viewer follows, not access to downloaded geometry. Parent session listing is denied. Use the generated random session codes.
 
 Anonymous identities belong to a browser profile. Clearing site data, using private browsing or switching browsers creates a different identity. Keep the GM’s original browser/profile; account linking and GM ownership recovery are not implemented. Separate devices get separate UIDs, even for the same person, and need their own token assignment.
 
-Walls and doors are visual geometry. There is no collision checking, player movement, combat engine, fog of war, or DD2VTT light-source recreation in this version. The GM can move tokens through walls. Ambient scene lighting keeps the imported floor visible.
+Walls and doors are visual geometry. There is no collision checking, player movement, combat engine, fog of war or shadow casting in this version. The GM can move tokens through walls. Maps without lights use bright ambient lighting.
 
 ## Checks
 
-Run `npm test` (Node 20+). Tests cover DD2VTT coordinate normalization, door bounds/state, image formats and invalid inputs. Optionally set `DD2VTT_TEST_FILE` to test a real export.
+Run `npm test` (Node 20+). Tests cover map validation, resizing, the light cap, door orientation, wall outlines and the DD2VTT export.
 
-On Windows with Microsoft Edge installed at its standard location, run `node scripts/browser-smoke.mjs` for an isolated headless local-mode check of the GM/player flow. This check intercepts the config response in its browser only; it never changes your Firebase configuration or writes to live Firebase. It uses ports 8094 and 9229 and saves ignored test profile/screenshots under `.qa-profile` and `.qa-output`. Real iPhone sensor behavior still requires a physical device.
+On Windows with Microsoft Edge installed at its standard location, run `node scripts/browser-smoke.mjs` for an isolated headless local-mode check of the GM/player flow, including a painting stroke and the starter room. This check intercepts the config response in its browser only; it never changes your Firebase configuration or writes to live Firebase. It uses ports 8094 and 9229 and saves ignored test profile/screenshots under `.qa-profile` and `.qa-output`. Real iPhone sensor behavior still requires a physical device.
 
 Manual acceptance check after Firebase setup: join from a second device, assign its UID, move its token, toggle a door, adjust wall height, reload both pages, and verify that scene and token state persist. Verify that an unassigned player cannot choose other players’ tokens, then test Safari motion permission, recentering and portrait/landscape rotation. Security rules should also be tested in the Firebase rules simulator: GM writes succeed; player token/map writes and parent session listing fail; players can register only their own UID.
 

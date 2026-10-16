@@ -1,9 +1,11 @@
 // Optional Windows smoke check using the installed Edge; no npm dependencies.
 import {spawn} from 'node:child_process';
-import {mkdir,writeFile} from 'node:fs/promises';
+import {mkdir,writeFile,rm} from 'node:fs/promises';
 import {resolve} from 'node:path';
 const delay=ms=>new Promise(r=>setTimeout(r,ms));
 const root=resolve(import.meta.dirname,'..');
+// Start from a clean profile so a session saved by a previous run is not auto-reopened mid-test.
+await rm(resolve(root,'.qa-profile'),{recursive:true,force:true});
 const server=spawn('python',['-m','http.server','8094','--bind','127.0.0.1'],{cwd:root,windowsHide:true,stdio:'ignore'});
 const browser=spawn('C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe',['--headless=new','--no-first-run','--no-default-browser-check','--remote-debugging-port=9229',`--user-data-dir=${resolve(root,'.qa-profile')}`,'--use-angle=swiftshader','--enable-unsafe-swiftshader','about:blank'],{windowsHide:true,stdio:'ignore'});
 const sockets=[];let browserSocket;
@@ -25,8 +27,17 @@ try{
   await until(()=>gm.eval("document.querySelector('#status').textContent.includes('LOCAL DEMO')"),'GM imports and WebGL').catch(async e=>{console.log('Browser errors:',gm.errors);console.log('Page:',await gm.eval("JSON.stringify({url:location.href,status:document.querySelector('#status')?.textContent,canvas:document.querySelectorAll('canvas').length,body:document.body?.innerText.slice(0,400)})"));console.log('Imports:',await gm.eval("Promise.race([import('./js/gm.js').then(()=> 'loaded').catch(e=>e.stack),new Promise(r=>setTimeout(()=>r('import timed out'),8000))])"));console.log('CDN check:',await gm.eval("fetch('https://cdn.jsdelivr.net/npm/three@0.180.0/build/three.module.js',{signal:AbortSignal.timeout(5000)}).then(r=>r.status).catch(e=>e.message)"));throw e;});
   await gm.eval("document.querySelector('#create').click()");
   const room=await until(()=>gm.eval("document.querySelector('#room').value"),'create session');
-  await gm.eval("document.querySelector('#demo').click()");
-  await until(()=>gm.eval("document.querySelector('#map-info').textContent.includes('16 × 12')"),'demo map');
+  await until(()=>gm.eval("document.querySelectorAll('#palette .tile').length>0"),'asset palette');
+  const cell=await gm.eval("(()=>{const r=document.querySelector('.editor-canvas').getBoundingClientRect();return {x:r.left+r.width*.5,y:r.top+r.height*.5};})()");
+  await gm.call('Input.dispatchMouseEvent',{type:'mousePressed',...cell,button:'left',buttons:1,clickCount:1});
+  await gm.call('Input.dispatchMouseEvent',{type:'mouseMoved',x:cell.x+60,y:cell.y,button:'left',buttons:1});
+  await gm.call('Input.dispatchMouseEvent',{type:'mouseReleased',x:cell.x+60,y:cell.y,button:'left',clickCount:1});
+  await until(()=>gm.eval("/ [2-9]\d* floor .*unpublished/.test(document.querySelector('#map-info').textContent)"),'floor painting stroke');
+  await gm.eval("window.confirm=()=>true;document.querySelector('#starter').click()");
+  await until(()=>gm.eval("document.querySelector('#map-info').textContent.includes('16 × 12')&&!document.querySelector('#map-info').textContent.includes('unpublished')"),'starter map publish');
+  await gm.eval("document.querySelector('#mode-draw').click();document.querySelector('[data-tool=light]').click()");await delay(400);
+  await mkdir(resolve(root,'.qa-output'),{recursive:true});await writeFile(resolve(root,'.qa-output','editor.png'),Buffer.from((await gm.call('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await gm.eval("document.querySelector('[data-tool=floor]').click();document.querySelector('#mode-3d').click()");
   await gm.eval("document.querySelector('#add').click()");await until(()=>gm.eval("document.querySelectorAll('.token-card').length===1"),'token creation');
   const viewer=await page('http://127.0.0.1:8094/viewer.html?room='+room);
   await until(()=>viewer.eval("document.querySelector('#status').textContent.includes('LOCAL DEMO')"),'viewer imports');
@@ -47,7 +58,7 @@ try{
   await gm.eval("const h=document.querySelector('#height');h.value='3.5';h.dispatchEvent(new Event('change'))");
   await until(()=>gm.eval("document.querySelector('#height').value==='3.5'"),'wall height');
   const state=await gm.eval(`(async()=>{const {connect}=await import('./js/store.js');return (await connect()).get('sessions/${room}');})()`);
-  if(state.scene.height!==3.5||state.doors['0']!==false||!Object.values(state.tokens).every(t=>t.name==='Synced Ranger'))throw Error('Persisted state mismatch');
+  if(state.scene.height!==3.5||state.doors['8_6']!==false||state.scene.map.version!==2||!Object.values(state.tokens).every(t=>t.name==='Synced Ranger'))throw Error('Persisted state mismatch');
   await mkdir(resolve(root,'.qa-output'),{recursive:true});
   for(const [name,client]of [['gm',gm],['viewer',viewer]]){const shot=await client.call('Page.captureScreenshot',{format:'png'});await writeFile(resolve(root,'.qa-output',name+'.png'),Buffer.from(shot.data,'base64'));}
   if(gm.errors.length||viewer.errors.length)throw Error([...gm.errors,...viewer.errors].join('\n'));
@@ -57,6 +68,6 @@ try{
   await viewer.eval("window.dispatchEvent(new DeviceOrientationEvent('deviceorientation',{alpha:35,beta:90,gamma:0}));document.querySelector('#recenter').click()");
   await viewer.eval("document.querySelector('#motion').click()");
   await until(()=>viewer.eval("document.querySelector('#motion').textContent==='Enable motion'"),'motion disable');
-  console.log('PASS: GM map/token creation and movement, player registration, assignment, first-person entry, rename sync, doors, height, IndexedDB persistence and mobile motion UI.');
-  console.log('Screenshots: .qa-output/gm.png and .qa-output/viewer.png');
+  console.log('PASS: GM tile painting, map publish, token creation and movement, player registration, assignment, first-person entry, rename sync, doors, height, IndexedDB persistence and mobile motion UI.');
+  console.log('Screenshots: .qa-output/editor.png, gm.png and viewer.png');
 }finally{if(browserSocket)await Promise.race([browserSocket.call('Browser.close').catch(()=>{}),delay(2000)]);sockets.forEach(ws=>ws.close());browser.kill();server.kill();}

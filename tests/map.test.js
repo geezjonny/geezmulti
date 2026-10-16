@@ -1,10 +1,72 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {readFileSync} from 'node:fs';
-import {parseMap} from '../js/map.js';
-const fixture=()=>({resolution:{map_size:{x:10,y:8},map_origin:{x:2,y:3},pixels_per_grid:70},image:'UklGRtest',line_of_sight:[[{x:2,y:3},{x:5,y:3},{x:5,y:6}]],objects_line_of_sight:[[{x:7,y:7},{x:8,y:7}]],portals:[{bounds:[{x:5,y:6},{x:5,y:7}],closed:false}]});
-test('cropped map origin aligns floor, walls, objects and door bounds',()=>{const map=parseMap(fixture());assert.equal(map.width,10);assert.equal(map.depth,8);assert.equal(map.walls.length,3);assert.deepEqual(map.walls[0],[{x:0,y:0},{x:3,y:0}]);assert.deepEqual(map.doors[0],{id:'0',bounds:[{x:3,y:3},{x:3,y:4}],closed:false});assert.match(map.image,/^data:image\/webp;base64,/);});
-test('supports PNG, JPEG and existing image data URLs',()=>{for(const [image,prefix]of [['iVBORw0KGgo','data:image/png;base64,'],['/9j/test','data:image/jpeg;base64,'],['data:image/webp;base64,UklGRtest','data:image/webp;base64,']]){const f=fixture();f.image=image;assert.ok(parseMap(f).image.startsWith(prefix));}});
-test('maps without walls and doors remain usable',()=>{const f=fixture();delete f.line_of_sight;delete f.objects_line_of_sight;delete f.portals;delete f.resolution.map_origin;const map=parseMap(f);assert.deepEqual(map.walls,[]);assert.deepEqual(map.doors,[]);});
-test('rejects invalid dimensions, image, origin and geometry before publishing',()=>{for(const mutate of [f=>f.resolution.map_size.x=0,f=>f.resolution.pixels_per_grid=-1,f=>f.image='',f=>f.resolution.map_origin={x:NaN,y:0},f=>f.line_of_sight[0][1].x=Infinity,f=>f.portals[0].bounds=[]]){const f=fixture();mutate(f);assert.throws(()=>parseMap(f));}});
-test('parses actual DD2VTT files supplied via DD2VTT_TEST_FILE', {skip:!process.env.DD2VTT_TEST_FILE},()=>{const map=parseMap(JSON.parse(readFileSync(process.env.DD2VTT_TEST_FILE,'utf8')));assert.ok(map.width>0);assert.ok(map.walls.length>0);assert.ok(map.image.startsWith('data:image/'));});
+import {emptyMap, normalizeMap, resizeMap, doorAxis, wallEdges, toDD2VTT, starterMap, cellCount, key, MAX_LIGHTS} from '../js/map.js';
+const assets = {floor: ['floor/stone.png'], wall: ['wall/brick.png'], door: ['door/wood.png']};
+
+test('normalizeMap keeps valid cells and fills layers Firebase dropped', () => {
+  const map = normalizeMap({version: 2, width: 4, depth: 3, floor: {'0_0': 'floor/stone.png'}});
+  assert.deepEqual(map, {version: 2, width: 4, depth: 3, floor: {'0_0': 'floor/stone.png'}, walls: {}, doors: {}, lights: {}});
+});
+
+test('normalizeMap drops out-of-bounds, malformed and conflicting cells', () => {
+  const map = normalizeMap({version: 2, width: 3, depth: 3,
+    floor: {'3_0': 'floor/stone.png', '0_-1': 'floor/stone.png', 'a_b': 'floor/stone.png', '1_1': '../secret.png', '0_0': 'floor/x.jpg', '2_2': 'floor/ok tile (2).png'},
+    walls: {'1_0': 'wall/brick.png'},
+    doors: {'1_0': {asset: 'door/wood.png'}, '1_1': {asset: 'door/wood.png', closed: false}},
+    lights: {'0_0': '#FFAA00', '0_1': 'red'}});
+  assert.deepEqual(map.floor, {'2_2': 'floor/ok tile (2).png'});
+  assert.deepEqual(map.doors, {'1_1': {asset: 'door/wood.png', closed: false}}, 'a door cannot share a cell with a wall');
+  assert.deepEqual(map.lights, {'0_0': '#ffaa00'});
+});
+
+test('rejects old imported maps and invalid sizes', () => {
+  assert.throws(() => normalizeMap({width: 10, depth: 10, image: 'data:image/png;base64,'}), /old imported map/);
+  assert.throws(() => emptyMap(0, 5));
+  assert.throws(() => emptyMap(101, 5));
+  assert.throws(() => emptyMap(2.5, 5));
+});
+
+test('light count is capped', () => {
+  const lights = Object.fromEntries(Array.from({length: 30}, (_, i) => [key(i, 0), '#ffffff']));
+  assert.equal(Object.keys(normalizeMap({version: 2, width: 30, depth: 1, lights}).lights).length, MAX_LIGHTS);
+});
+
+test('resizing trims cells outside the new edge', () => {
+  const map = starterMap(assets), small = resizeMap(map, 5, 5);
+  assert.equal(small.width, 5);
+  assert.ok(cellCount(small) < cellCount(map));
+  assert.ok(Object.keys(small.walls).every(k => k.split('_').every(n => Number(n) < 5)));
+});
+
+test('door panels follow the walls around them', () => {
+  const map = emptyMap(5, 5);
+  map.walls[key(2, 1)] = map.walls[key(2, 3)] = 'wall/brick.png';
+  assert.equal(doorAxis(map, 2, 2), 'z', 'walls above and below: panel runs along z');
+  map.walls[key(1, 2)] = 'wall/brick.png';
+  assert.equal(doorAxis(map, 2, 2), 'x', 'any side wall wins');
+  assert.equal(doorAxis(emptyMap(3, 3), 1, 1), 'x', 'free-standing defaults to x');
+});
+
+test('wall outline merges straight runs', () => {
+  const map = emptyMap(5, 5);
+  for (const x of [1, 2, 3]) map.walls[key(x, 1)] = 'wall/brick.png';
+  const edges = wallEdges(map);
+  assert.equal(edges.length, 4, 'a 3x1 bar is one rectangle');
+  assert.deepEqual(edges.find(([a, b]) => a.y === 1 && b.y === 1), [{x: 1, y: 1}, {x: 4, y: 1}]);
+});
+
+test('DD2VTT export describes walls, portals and lights in grid units', () => {
+  const map = starterMap(assets), out = toDD2VTT(map, 'iVBORw0KGgo', 64);
+  assert.deepEqual(out.resolution, {map_origin: {x: 0, y: 0}, map_size: {x: 16, y: 12}, pixels_per_grid: 64});
+  assert.equal(out.portals.length, 1);
+  assert.deepEqual(out.portals[0].bounds, [{x: 8.5, y: 6}, {x: 8.5, y: 7}], 'door in a vertical wall spans the cell vertically');
+  assert.equal(out.lights.length, 2);
+  assert.equal(out.lights[0].color, 'ffffb35c');
+  assert.ok(out.line_of_sight.length > 0);
+  for (const [a, b] of out.line_of_sight) assert.ok(a.x === b.x || a.y === b.y, 'grid walls are axis-aligned');
+  assert.equal(out.image, 'iVBORw0KGgo');
+});
+
+test('starter map needs one asset of each kind', () => {
+  assert.throws(() => starterMap({floor: [], wall: ['wall/a.png'], door: ['door/a.png']}), /assets/);
+});

@@ -1,0 +1,16 @@
+{
+  "floor": [
+    "floor/dirt.png",
+    "floor/grass.png",
+    "floor/stone.png",
+    "floor/wood.png"
+  ],
+  "wall": [
+    "wall/brick.png",
+    "wall/stone.png"
+  ],
+  "door": [
+    "door/iron.png",
+    "door/wood.png"
+  ]
+}
