@@ -1,0 +1,10 @@
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import {readFileSync} from 'node:fs';
+import {parseMap} from '../js/map.js';
+const fixture=()=>({resolution:{map_size:{x:10,y:8},map_origin:{x:2,y:3},pixels_per_grid:70},image:'UklGRtest',line_of_sight:[[{x:2,y:3},{x:5,y:3},{x:5,y:6}]],objects_line_of_sight:[[{x:7,y:7},{x:8,y:7}]],portals:[{bounds:[{x:5,y:6},{x:5,y:7}],closed:false}]});
+test('cropped map origin aligns floor, walls, objects and door bounds',()=>{const map=parseMap(fixture());assert.equal(map.width,10);assert.equal(map.depth,8);assert.equal(map.walls.length,3);assert.deepEqual(map.walls[0],[{x:0,y:0},{x:3,y:0}]);assert.deepEqual(map.doors[0],{id:'0',bounds:[{x:3,y:3},{x:3,y:4}],closed:false});assert.match(map.image,/^data:image\/webp;base64,/);});
+test('supports PNG, JPEG and existing image data URLs',()=>{for(const [image,prefix]of [['iVBORw0KGgo','data:image/png;base64,'],['/9j/test','data:image/jpeg;base64,'],['data:image/webp;base64,UklGRtest','data:image/webp;base64,']]){const f=fixture();f.image=image;assert.ok(parseMap(f).image.startsWith(prefix));}});
+test('maps without walls and doors remain usable',()=>{const f=fixture();delete f.line_of_sight;delete f.objects_line_of_sight;delete f.portals;delete f.resolution.map_origin;const map=parseMap(f);assert.deepEqual(map.walls,[]);assert.deepEqual(map.doors,[]);});
+test('rejects invalid dimensions, image, origin and geometry before publishing',()=>{for(const mutate of [f=>f.resolution.map_size.x=0,f=>f.resolution.pixels_per_grid=-1,f=>f.image='',f=>f.resolution.map_origin={x:NaN,y:0},f=>f.line_of_sight[0][1].x=Infinity,f=>f.portals[0].bounds=[]]){const f=fixture();mutate(f);assert.throws(()=>parseMap(f));}});
+test('parses actual DD2VTT files supplied via DD2VTT_TEST_FILE', {skip:!process.env.DD2VTT_TEST_FILE},()=>{const map=parseMap(JSON.parse(readFileSync(process.env.DD2VTT_TEST_FILE,'utf8')));assert.ok(map.width>0);assert.ok(map.walls.length>0);assert.ok(map.image.startsWith('data:image/'));});

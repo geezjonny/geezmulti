@@ -1,0 +1,37 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "sessions": {
+      "$room": {
+        ".read": "auth != null",
+        ".write": "auth != null && ((!data.exists() && newData.child('meta/owner').val() === auth.uid) || data.child('meta/owner').val() === auth.uid)",
+        "meta": {
+          ".validate": "newData.hasChildren(['owner', 'createdAt']) && (!data.exists() || newData.child('owner').val() === data.child('owner').val())",
+          "owner": { ".validate": "newData.isString()" },
+          "createdAt": { ".validate": "newData.isNumber()" },
+          "$other": { ".validate": false }
+        },
+        "players": {
+          "$uid": {
+            ".write": "auth != null && auth.uid === $uid && root.child('sessions').child($room).child('meta/owner').exists()",
+            ".validate": "newData.hasChildren(['name', 'joinedAt'])",
+            "name": { ".validate": "newData.isString() && newData.val().length > 0 && newData.val().length <= 40" },
+            "joinedAt": { ".validate": "newData.isNumber()" },
+            "$other": { ".validate": false }
+          }
+        },
+        "scene": {
+          ".validate": "newData.hasChildren(['map', 'height', 'revision']) && newData.child('height').isNumber() && newData.child('height').val() >= 0.2 && newData.child('height').val() <= 10"
+        },
+        "tokens": {
+          "$token": {
+            ".validate": "newData.hasChildren(['name', 'x', 'z', 'heading', 'color', 'assignedTo']) && newData.child('x').isNumber() && newData.child('z').isNumber() && newData.child('heading').isNumber() && newData.child('assignedTo').isString() && newData.child('name').isString() && newData.child('name').val().length <= 60"
+          }
+        },
+        "doors": { "$door": { ".validate": "newData.isBoolean()" } },
+        "$other": { ".validate": false }
+      }
+    }
+  }
+}
